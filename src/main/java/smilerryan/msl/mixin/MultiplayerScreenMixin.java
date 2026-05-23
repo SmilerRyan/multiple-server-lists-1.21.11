@@ -1,9 +1,13 @@
 package smilerryan.msl.mixin;
 
+import com.google.gson.*;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.multiplayer.MultiplayerScreen;
+import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
+import net.minecraft.client.network.ServerInfo;
 import net.minecraft.client.option.ServerList;
+import net.minecraft.nbt.*;
 import net.minecraft.text.Text;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -12,202 +16,350 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-import java.io.File;
+import java.io.*;
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
 
 @Mixin(MultiplayerScreen.class)
 public abstract class MultiplayerScreenMixin extends Screen {
+
     @Shadow private ServerList serverList;
     @Shadow private net.minecraft.client.gui.screen.multiplayer.MultiplayerServerListWidget serverListWidget;
 
     @Unique private TextFieldWidget msl$textBox;
-    @Unique private String msl$lastValue = null;
-    
-    // Profiles list storage tracking
-    @Unique private final List<String> msl$discoveredProfiles = new ArrayList<>();
-    @Unique private int msl$currentProfileIndex = 0;
+    @Unique private ButtonWidget msl$btn;
 
-    protected MultiplayerScreenMixin(Text title) { super(title); }
+    @Unique private final List<String> msl$profiles = new ArrayList<>();
+    @Unique private int msl$idx = 0;
 
-    @Inject(method = "init", at = @At("TAIL"))
-    private void addTextBox(CallbackInfo ci) {
-        // Restored full width layout bounds since side buttons are removed
-        msl$textBox = new TextFieldWidget(this.textRenderer, 4, this.height - 24, 150, 20, Text.literal(""));
-        msl$textBox.setMaxLength(256);
+    @Unique private String msl$last = null;
+    @Unique private boolean msl$json = true;
+
+    protected MultiplayerScreenMixin(Text t) { super(t); }
+
+    // ---------------- INIT ----------------
+
+    @Inject(method="init", at=@At("TAIL"))
+    private void init(CallbackInfo ci) {
+
+        msl$textBox = new TextFieldWidget(this.textRenderer, 4, this.height - 24, 140, 20, Text.literal(""));
         this.addDrawableChild(msl$textBox);
 
-        // Scan files on layout preparation
-        msl$scanForProfiles();
+        msl$btn = ButtonWidget.builder(Text.literal("C"), b -> {
+            String p = msl$p(msl$textBox.getText());
+			msl$convert(p);
+            msl$load(p);
+            msl$scan();
+        }).dimensions(150, this.height - 24, 20, 20).build();
+
+        this.addDrawableChild(msl$btn);
+        msl$scan();
     }
+	
+	// Convert
+	@Unique
+	private void msl$convert(String profile) {
 
-    @Inject(method = "tick", at = @At("TAIL"))
-    private void updateTextBoxPosition(CallbackInfo ci) {
-        if (msl$textBox == null) return;
+		try {
+			File jsonFile = msl$j(profile);
+			File datFile = msl$d(profile);
 
-        msl$textBox.setDimensionsAndPosition(150, 20, 4, this.height - 24);
+			// JSON -> DAT
+			if (jsonFile.exists()) {
 
-        String current = msl$textBox.getText();
-        if (!current.equals(msl$lastValue)) {
-            msl$lastValue = current;
-            String sanitized = current.replaceAll("[^A-Za-z0-9]", "-");
-            String fileName = sanitized.isEmpty() ? "servers.dat" : "servers-" + sanitized + ".dat";
+				JsonObject root;
+				try (FileReader r = new FileReader(jsonFile)) {
+					root = JsonParser.parseReader(r).getAsJsonObject();
+				}
 
-            msl$reloadServerList(fileName);
-        }
-    }
+				NbtList list = new NbtList();
 
-    /**
-     * Intercepts standard mouse scrolls on the screen level.
-     * Horizontal scroll parameter is ignored for this approach.
-     */
+				if (root.has("servers")) {
+					for (JsonElement el : root.getAsJsonArray("servers")) {
+						list.add(msl$jn(el.getAsJsonObject()));
+					}
+				}
+
+				NbtCompound out = new NbtCompound();
+				out.put("servers", list);
+
+				NbtIo.writeCompressed(out, datFile.toPath());
+				jsonFile.delete();
+				return;
+			}
+
+			// DAT -> JSON
+			// DAT -> JSON (compressed + uncompressed safe)
+			if (datFile.exists()) {
+
+				NbtCompound root = null;
+
+				// 1) compressed attempt (file path API)
+				try {
+					root = NbtIo.readCompressed(
+							datFile.toPath(),
+							NbtSizeTracker.ofUnlimitedBytes()
+					);
+				} catch (Exception ignored) {
+					root = null;
+				}
+
+				// 2) uncompressed fallback (ALSO Path-based)
+				if (root == null) {
+					try {
+						root = NbtIo.read(datFile.toPath());
+					} catch (Exception ignored) {
+						root = null;
+					}
+				}
+
+				if (root == null) return;
+
+				JsonObject out = new JsonObject();
+				JsonArray arr = new JsonArray();
+
+				NbtList list = root.getList("servers").orElse(null);
+
+				if (list != null) {
+					for (int i = 0; i < list.size(); i++) {
+						if (list.get(i) instanceof NbtCompound c) {
+							arr.add(msl$nbtToJson(c));
+						}
+					}
+				}
+
+				out.add("servers", arr);
+
+				try (FileWriter w = new FileWriter(jsonFile)) {
+					new GsonBuilder().setPrettyPrinting().create().toJson(out, w);
+				}
+
+				datFile.delete();
+			}
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+    // ---------------- TICK ----------------
+
+	@Inject(method="tick", at=@At("TAIL"))
+	private void tick(CallbackInfo ci) {
+
+		if (msl$textBox == null) return;
+
+		msl$textBox.setDimensionsAndPosition(140, 20, 4, this.height - 24);
+		msl$btn.setPosition(150, this.height - 24);
+
+		String cur = msl$textBox.getText();
+		String p = msl$p(cur);
+
+		if (msl$last == null || !msl$last.equals(p)) {
+			msl$last = p;
+			msl$load(p);
+		}
+	}
+
+    // ---------------- SCROLL ----------------
+
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
-        // Verify text field exists and check if mouse bounds align with it
-        if (msl$textBox != null && msl$textBox.isMouseOver(mouseX, mouseY)) {
-            // Update list scan reactively in case files were altered out of game
-            msl$scanForProfiles();
+    public boolean mouseScrolled(double x, double y, double h, double v) {
 
-            if (!msl$discoveredProfiles.isEmpty()) {
-                // If scrolling down (negative amount), advance index forward. Up (positive amount) goes backward.
-                int direction = verticalAmount < 0 ? 1 : -1;
-                
-                msl$currentProfileIndex = (msl$currentProfileIndex + direction + msl$discoveredProfiles.size()) % msl$discoveredProfiles.size();
-                msl$applySelectedProfile();
-                return true; // Consume event so background widgets don't also scroll
-            }
-        }
-        return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
+        if (msl$textBox == null || !msl$textBox.isMouseOver(x, y))
+            return super.mouseScrolled(x, y, h, v);
+
+        msl$scan();
+        if (msl$profiles.isEmpty()) return true;
+
+        int d = v < 0 ? 1 : -1;
+        msl$idx = (msl$idx + d + msl$profiles.size()) % msl$profiles.size();
+
+        msl$apply();
+        return true;
     }
 
-    @Unique
-    private void msl$scanForProfiles() {
-        if (this.client == null) return;
-        
-        msl$discoveredProfiles.clear();
-        msl$discoveredProfiles.add("servers.dat");
+    // ---------------- APPLY ----------------
 
-        File runDir = this.client.runDirectory;
-        if (runDir != null && runDir.exists()) {
-            String[] files = runDir.list((dir, name) -> name.startsWith("servers-") && name.endsWith(".dat"));
-            if (files != null) {
-                for (String file : files) {
-                    if (!msl$discoveredProfiles.contains(file)) {
-                        msl$discoveredProfiles.add(file);
-                    }
-                }
-            }
-        }
-        
-        String currentText = msl$textBox != null ? msl$textBox.getText() : "";
-        String currentFileName = currentText.isEmpty() ? "servers.dat" : "servers-" + currentText.replaceAll("[^A-Za-z0-9]", "-") + ".dat";
-        int matchIdx = msl$discoveredProfiles.indexOf(currentFileName);
-        msl$currentProfileIndex = (matchIdx != -1) ? matchIdx : 0;
+    @Unique
+    private void msl$apply() {
+
+        if (msl$profiles.isEmpty()) return;
+
+        String p = msl$profiles.get(msl$idx);
+        String v = p.equals("servers") ? "" : p.replace("servers-", "");
+
+        msl$textBox.setText(v);
+
+        // force reload
+        msl$last = null;
+        msl$load(msl$p(v));
     }
 
-    @Unique
-    private void msl$applySelectedProfile() {
-        if (msl$currentProfileIndex >= msl$discoveredProfiles.size() || msl$currentProfileIndex < 0) return;
-        
-        String targetFile = msl$discoveredProfiles.get(msl$currentProfileIndex);
-        String profileName = "";
-        
-        if (targetFile.startsWith("servers-") && targetFile.endsWith(".dat")) {
-            profileName = targetFile.substring(8, targetFile.length() - 4);
-        }
-        
-        if (msl$textBox != null) {
-            msl$textBox.setText(profileName);
-        }
-    }
+    // ---------------- PROFILE ----------------
 
     @Unique
-    @SuppressWarnings("unchecked")
-    private void msl$reloadServerList(String fileName) {
+    private String msl$p(String s) {
+        s = s.replaceAll("[^A-Za-z0-9]", "-");
+        return s.isEmpty() ? "servers" : "servers-" + s;
+    }
+
+    @Unique private File msl$j(String p){ return new File(this.client.runDirectory, p+".json"); }
+    @Unique private File msl$d(String p){ return new File(this.client.runDirectory, p+".dat"); }
+
+    // ---------------- LOAD ----------------
+
+    @Unique
+    private void msl$load(String p) {
+
         if (this.client == null) return;
 
-        final java.io.File customFile = new java.io.File(this.client.runDirectory, fileName);
+        File j = msl$j(p);
+        File d = msl$d(p);
 
-        ServerList newList = new ServerList(this.client) {
+        ServerList l = new ServerList(this.client) {
+
             @Override
             public void loadFile() {
                 try {
-                    java.lang.reflect.Field serversField = ServerList.class.getDeclaredField("field_3749");
-                    serversField.setAccessible(true);
-                    java.util.List<net.minecraft.client.network.ServerInfo> internalServers = 
-                        (java.util.List<net.minecraft.client.network.ServerInfo>) serversField.get(this);
-                    
-                    internalServers.clear();
-                    
-                    if (!customFile.exists()) {
+
+                    List<ServerInfo> s = msl$list(this);
+                    s.clear();
+
+                    if (j.exists()) {
+
+                        try (FileReader r = new FileReader(j)) {
+
+                            JsonObject root = JsonParser.parseReader(r).getAsJsonObject();
+
+                            for (JsonElement e : root.getAsJsonArray("servers")) {
+
+                                ServerInfo info = ServerInfo.fromNbt(msl$jn(e.getAsJsonObject()));
+                                if (info != null) s.add(info);
+                            }
+                        }
+
+                        msl$json = true;
                         return;
                     }
 
-                    net.minecraft.nbt.NbtCompound nbtCompound = null;
-                    try {
-                        nbtCompound = net.minecraft.nbt.NbtIo.readCompressed(
-                            customFile.toPath(), 
-                            net.minecraft.nbt.NbtSizeTracker.ofUnlimitedBytes()
-                        );
-                    } catch (java.util.zip.ZipException e) {
+                    if (d.exists()) {
+
+                        NbtCompound root;
                         try {
-                            nbtCompound = net.minecraft.nbt.NbtIo.read(customFile.toPath());
-                        } catch (Exception uncompressedException) {
-                            uncompressedException.printStackTrace();
+                            root = NbtIo.readCompressed(d.toPath(), NbtSizeTracker.ofUnlimitedBytes());
+                        } catch (Exception e) {
+                            root = NbtIo.read(d.toPath());
                         }
-                    }
-                    
-                    if (nbtCompound != null) {
-                        net.minecraft.nbt.NbtList nbtList = nbtCompound.getList("servers").orElse(null);
-                        
-                        if (nbtList != null) {
-                            for (int i = 0; i < nbtList.size(); ++i) {
-                                net.minecraft.nbt.NbtElement element = nbtList.get(i);
-                                
-                                if (element instanceof net.minecraft.nbt.NbtCompound serverData) {
-                                    net.minecraft.client.network.ServerInfo info = 
-                                        net.minecraft.client.network.ServerInfo.fromNbt(serverData);
-                                    if (info != null) {
-                                        internalServers.add(info);
-                                    }
-                                }
+
+                        NbtList list = root.getList("servers").orElse(null);
+                        if (list == null) return;
+
+                        for (int i=0;i<list.size();i++)
+                            if (list.get(i) instanceof NbtCompound c) {
+                                ServerInfo info = ServerInfo.fromNbt(c);
+                                if (info != null) s.add(info);
                             }
-                        }
+
+                        msl$json = false;
                     }
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
+
+                } catch (Exception ignored) {}
             }
 
             @Override
             public void saveFile() {
                 try {
-                    java.lang.reflect.Field serversField = ServerList.class.getDeclaredField("field_3749");
-                    serversField.setAccessible(true);
-                    java.util.List<net.minecraft.client.network.ServerInfo> internalServers = 
-                        (java.util.List<net.minecraft.client.network.ServerInfo>) serversField.get(this);
 
-                    net.minecraft.nbt.NbtList nbtList = new net.minecraft.nbt.NbtList();
-                    for (net.minecraft.client.network.ServerInfo serverInfo : internalServers) {
-                        nbtList.add(serverInfo.toNbt());
+                    List<ServerInfo> s = msl$list(this);
+
+                    if (msl$json) {
+
+                        JsonObject root = new JsonObject();
+                        JsonArray arr = new JsonArray();
+
+                        for (ServerInfo i : s)
+                            arr.add(msl$nbtToJson(i.toNbt()));
+
+                        root.add("servers", arr);
+
+                        try (FileWriter w = new FileWriter(j)) {
+                            new Gson().toJson(root, w);
+                        }
+                        return;
                     }
 
-                    net.minecraft.nbt.NbtCompound nbtCompound = new net.minecraft.nbt.NbtCompound();
-                    nbtCompound.put("servers", nbtList);
+                    NbtList list = new NbtList();
+                    for (ServerInfo i : s) list.add(i.toNbt());
 
-                    net.minecraft.nbt.NbtIo.writeCompressed(nbtCompound, customFile.toPath());
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
+                    NbtCompound root = new NbtCompound();
+                    root.put("servers", list);
+
+                    NbtIo.writeCompressed(root, d.toPath());
+
+                } catch (Exception ignored) {}
             }
         };
 
-        this.serverList = newList;
+        this.serverList = l;
         this.serverList.loadFile();
 
         if (this.serverListWidget != null) {
-            this.serverListWidget.setSelected(null); 
+            this.serverListWidget.setSelected(null);
             this.serverListWidget.setServers(this.serverList);
         }
+    }
+
+    // ---------------- SCAN ----------------
+
+    @Unique
+    private void msl$scan() {
+
+        msl$profiles.clear();
+
+        File[] f = this.client.runDirectory.listFiles();
+        if (f == null) return;
+
+        for (File x : f) {
+            String n = x.getName();
+            if (n.startsWith("servers-") && (n.endsWith(".json") || n.endsWith(".dat")))
+                msl$profiles.add(n.replace(".json","").replace(".dat",""));
+        }
+
+        if (!msl$profiles.contains("servers"))
+            msl$profiles.add(0, "servers");
+
+        String cur = msl$p(msl$textBox != null ? msl$textBox.getText() : "");
+        msl$idx = Math.max(0, msl$profiles.indexOf(cur));
+    }
+
+    // ---------------- HELPERS ----------------
+
+    @Unique
+    @SuppressWarnings("unchecked")
+    private List<ServerInfo> msl$list(ServerList l) throws Exception {
+        Field f = ServerList.class.getDeclaredField("field_3749");
+        f.setAccessible(true);
+        return (List<ServerInfo>) f.get(l);
+    }
+
+    @Unique
+    private JsonObject msl$nbtToJson(NbtCompound n) {
+        JsonObject o = new JsonObject();
+        for (String k : n.getKeys()) {
+            NbtElement e = n.get(k);
+            if (e == null) continue;
+            o.addProperty(k, e.asString().orElse(""));
+        }
+        return o;
+    }
+
+    @Unique
+    private NbtCompound msl$jn(JsonObject o) {
+        NbtCompound n = new NbtCompound();
+        for (String k : o.keySet())
+            n.putString(k, o.get(k).getAsString());
+        return n;
     }
 }
