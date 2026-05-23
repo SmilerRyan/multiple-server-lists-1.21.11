@@ -38,131 +38,139 @@ public abstract class MultiplayerScreenMixin extends Screen {
 
     protected MultiplayerScreenMixin(Text t) { super(t); }
 
-    // ---------------- INIT ----------------
-
     @Inject(method="init", at=@At("TAIL"))
     private void init(CallbackInfo ci) {
 
-        msl$textBox = new TextFieldWidget(this.textRenderer, 4, this.height - 24, 140, 20, Text.literal(""));
-        this.addDrawableChild(msl$textBox);
-
-        msl$btn = ButtonWidget.builder(Text.literal("C"), b -> {
+        msl$btn = ButtonWidget.builder(Text.literal("J"), b -> {
             String p = msl$p(msl$textBox.getText());
-			msl$convert(p);
+            msl$convert(p);
             msl$load(p);
             msl$scan();
-        }).dimensions(150, this.height - 24, 20, 20).build();
+        }).dimensions(4, this.height - 24, 16, 16).build();
+
+        msl$textBox = new TextFieldWidget(this.textRenderer, 22, this.height - 24, 140, 16, Text.literal(""));
+        msl$textBox.setSuggestion("All Servers");
 
         this.addDrawableChild(msl$btn);
+        this.addDrawableChild(msl$textBox);
+
         msl$scan();
     }
-	
-	// Convert
-	@Unique
-	private void msl$convert(String profile) {
 
-		try {
-			File jsonFile = msl$j(profile);
-			File datFile = msl$d(profile);
+    @Unique
+    private void msl$convert(String profile) {
 
-			// JSON -> DAT
-			if (jsonFile.exists()) {
+        try {
+            File jsonFile = msl$j(profile);
+            File datFile = msl$d(profile);
 
-				JsonObject root;
-				try (FileReader r = new FileReader(jsonFile)) {
-					root = JsonParser.parseReader(r).getAsJsonObject();
-				}
+            if (jsonFile.exists()) {
 
-				NbtList list = new NbtList();
+                JsonObject root;
+                try (FileReader r = new FileReader(jsonFile)) {
+                    root = JsonParser.parseReader(r).getAsJsonObject();
+                }
 
-				if (root.has("servers")) {
-					for (JsonElement el : root.getAsJsonArray("servers")) {
-						list.add(msl$jn(el.getAsJsonObject()));
-					}
-				}
+                NbtList list = new NbtList();
 
-				NbtCompound out = new NbtCompound();
-				out.put("servers", list);
+                if (root.has("servers")) {
+                    for (JsonElement el : root.getAsJsonArray("servers")) {
+                        list.add(msl$jn(el.getAsJsonObject()));
+                    }
+                }
 
-				NbtIo.writeCompressed(out, datFile.toPath());
-				jsonFile.delete();
-				return;
-			}
+                NbtCompound out = new NbtCompound();
+                out.put("servers", list);
 
-			// DAT -> JSON
-			// DAT -> JSON (compressed + uncompressed safe)
-			if (datFile.exists()) {
+                NbtIo.writeCompressed(out, datFile.toPath());
+                jsonFile.delete();
 
-				NbtCompound root = null;
+                msl$json = true;
+                return;
+            }
 
-				// 1) compressed attempt (file path API)
-				try {
-					root = NbtIo.readCompressed(
-							datFile.toPath(),
-							NbtSizeTracker.ofUnlimitedBytes()
-					);
-				} catch (Exception ignored) {
-					root = null;
-				}
+            if (datFile.exists()) {
 
-				// 2) uncompressed fallback (ALSO Path-based)
-				if (root == null) {
-					try {
-						root = NbtIo.read(datFile.toPath());
-					} catch (Exception ignored) {
-						root = null;
-					}
-				}
+                NbtCompound root = null;
 
-				if (root == null) return;
+                try {
+                    root = NbtIo.readCompressed(
+                            datFile.toPath(),
+                            NbtSizeTracker.ofUnlimitedBytes()
+                    );
+                } catch (Exception ignored) {}
 
-				JsonObject out = new JsonObject();
-				JsonArray arr = new JsonArray();
+                if (root == null) {
+                    try {
+                        root = NbtIo.read(datFile.toPath());
+                    } catch (Exception ignored) {}
+                }
 
-				NbtList list = root.getList("servers").orElse(null);
+                if (root == null) return;
 
-				if (list != null) {
-					for (int i = 0; i < list.size(); i++) {
-						if (list.get(i) instanceof NbtCompound c) {
-							arr.add(msl$nbtToJson(c));
-						}
-					}
-				}
+                JsonObject out = new JsonObject();
+                JsonArray arr = new JsonArray();
 
-				out.add("servers", arr);
+                NbtList list = root.getList("servers").orElse(null);
 
-				try (FileWriter w = new FileWriter(jsonFile)) {
-					new GsonBuilder().setPrettyPrinting().create().toJson(out, w);
-				}
+                if (list != null) {
+                    for (int i = 0; i < list.size(); i++) {
+                        if (list.get(i) instanceof NbtCompound c) {
+                            arr.add(msl$nbtToJson(c));
+                        }
+                    }
+                }
 
-				datFile.delete();
-			}
+                out.add("servers", arr);
 
-		} catch (Exception e) {
-			e.printStackTrace();
-		}
-	}
+                try (FileWriter w = new FileWriter(jsonFile)) {
+                    new GsonBuilder().setPrettyPrinting().create().toJson(out, w);
+                }
 
-    // ---------------- TICK ----------------
+                datFile.delete();
 
-	@Inject(method="tick", at=@At("TAIL"))
-	private void tick(CallbackInfo ci) {
+                msl$json = false;
+            }
 
-		if (msl$textBox == null) return;
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
 
-		msl$textBox.setDimensionsAndPosition(140, 20, 4, this.height - 24);
-		msl$btn.setPosition(150, this.height - 24);
+    @Inject(method="tick", at=@At("TAIL"))
+    private void tick(CallbackInfo ci) {
 
-		String cur = msl$textBox.getText();
-		String p = msl$p(cur);
+        if (msl$textBox == null || msl$btn == null) return;
 
-		if (msl$last == null || !msl$last.equals(p)) {
-			msl$last = p;
-			msl$load(p);
-		}
-	}
+        String cur = msl$textBox.getText();
 
-    // ---------------- SCROLL ----------------
+        if (cur.isEmpty()) {
+            msl$textBox.setSuggestion("All Servers");
+        } else {
+            msl$textBox.setSuggestion(null);
+        }
+
+        int textW = this.textRenderer.getWidth(cur.isEmpty() ? "All Servers" : cur);
+        int width = Math.max(60, textW + 10);
+
+        msl$textBox.setDimensionsAndPosition(width, 16, 22, this.height - 24);
+        msl$btn.setPosition(4, this.height - 24);
+
+        String p = msl$p(cur);
+
+        if (msl$last == null || !msl$last.equals(p)) {
+            msl$last = p;
+            msl$load(p);
+        }
+
+        // button color update (JSON = green, DAT/NBT = red)
+        if (msl$btn != null) {
+            msl$btn.active = true;
+            msl$btn.setMessage(Text.literal("J").styled(style -> {
+                return style.withColor(msl$json ? 0x00FF00 : 0xFF0000);
+            }));
+        }
+    }
 
     @Override
     public boolean mouseScrolled(double x, double y, double h, double v) {
@@ -180,8 +188,6 @@ public abstract class MultiplayerScreenMixin extends Screen {
         return true;
     }
 
-    // ---------------- APPLY ----------------
-
     @Unique
     private void msl$apply() {
 
@@ -192,12 +198,9 @@ public abstract class MultiplayerScreenMixin extends Screen {
 
         msl$textBox.setText(v);
 
-        // force reload
         msl$last = null;
         msl$load(msl$p(v));
     }
-
-    // ---------------- PROFILE ----------------
 
     @Unique
     private String msl$p(String s) {
@@ -207,8 +210,6 @@ public abstract class MultiplayerScreenMixin extends Screen {
 
     @Unique private File msl$j(String p){ return new File(this.client.runDirectory, p+".json"); }
     @Unique private File msl$d(String p){ return new File(this.client.runDirectory, p+".dat"); }
-
-    // ---------------- LOAD ----------------
 
     @Unique
     private void msl$load(String p) {
@@ -234,7 +235,6 @@ public abstract class MultiplayerScreenMixin extends Screen {
                             JsonObject root = JsonParser.parseReader(r).getAsJsonObject();
 
                             for (JsonElement e : root.getAsJsonArray("servers")) {
-
                                 ServerInfo info = ServerInfo.fromNbt(msl$jn(e.getAsJsonObject()));
                                 if (info != null) s.add(info);
                             }
@@ -311,8 +311,6 @@ public abstract class MultiplayerScreenMixin extends Screen {
         }
     }
 
-    // ---------------- SCAN ----------------
-
     @Unique
     private void msl$scan() {
 
@@ -333,8 +331,6 @@ public abstract class MultiplayerScreenMixin extends Screen {
         String cur = msl$p(msl$textBox != null ? msl$textBox.getText() : "");
         msl$idx = Math.max(0, msl$profiles.indexOf(cur));
     }
-
-    // ---------------- HELPERS ----------------
 
     @Unique
     @SuppressWarnings("unchecked")
