@@ -49,7 +49,7 @@ public abstract class MultiplayerScreenMixin extends Screen {
         }).dimensions(4, this.height - 24, 16, 16).build();
 
         msl$textBox = new TextFieldWidget(this.textRenderer, 22, this.height - 24, 140, 16, Text.literal(""));
-        msl$textBox.setSuggestion("All Servers");
+        msl$textBox.setSuggestion("General");
 
         this.addDrawableChild(msl$btn);
         this.addDrawableChild(msl$textBox);
