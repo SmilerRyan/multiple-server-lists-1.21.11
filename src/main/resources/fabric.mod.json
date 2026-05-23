@@ -3,9 +3,9 @@
 	"id": "multiple-server-lists",
 	"version": "${version}",
 	"name": "Multiple Server Lists",
-	"description": "This is an example description! Tell everyone what your mod is about!",
+	"description": "Lets you create and switch between server.dat files in the multiplayer menu.",
 	"authors": [
-		"Me!"
+		"SmilerRyan", "Claude AI", "ChatGPT", "Google Gemini"
 	],
 	"contact": {
 		"homepage": "https://fabricmc.net/",
