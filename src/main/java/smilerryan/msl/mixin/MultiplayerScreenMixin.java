@@ -38,7 +38,7 @@ public abstract class MultiplayerScreenMixin extends Screen {
 
     protected MultiplayerScreenMixin(Text t) { super(t); }
 
-    @Inject(method="init", at=@At("TAIL"))
+    @Inject(method="init", at=@At("RETURN"))
     private void init(CallbackInfo ci) {
 
         msl$btn = ButtonWidget.builder(Text.literal("J"), b -> {
@@ -49,10 +49,12 @@ public abstract class MultiplayerScreenMixin extends Screen {
         }).dimensions(4, this.height - 24, 16, 16).build();
 
         msl$textBox = new TextFieldWidget(this.textRenderer, 22, this.height - 24, 140, 16, Text.literal(""));
-        msl$textBox.setSuggestion("General");
 
         this.addDrawableChild(msl$btn);
+        this.addSelectableChild(msl$btn);
+        
         this.addDrawableChild(msl$textBox);
+        this.addSelectableChild(msl$textBox);
 
         msl$scan();
     }
@@ -142,15 +144,23 @@ public abstract class MultiplayerScreenMixin extends Screen {
 
         if (msl$textBox == null || msl$btn == null) return;
 
-        String cur = msl$textBox.getText();
-
-        if (cur.isEmpty()) {
-            msl$textBox.setSuggestion("All Servers");
-        } else {
-            msl$textBox.setSuggestion(null);
+        if (msl$btn != null && !this.children().contains(msl$btn)) {
+            this.addDrawableChild(msl$btn);
+            this.addSelectableChild(msl$btn);
         }
 
-        int textW = this.textRenderer.getWidth(cur.isEmpty() ? "All Servers" : cur);
+        if (msl$textBox != null && !this.children().contains(msl$textBox)) {
+            this.addDrawableChild(msl$textBox);
+            this.addSelectableChild(msl$textBox);
+        }
+
+        String cur = msl$textBox.getText();
+
+        String placeholder = "General";
+
+        msl$textBox.setSuggestion(cur.isEmpty() ? placeholder : "");
+
+        int textW = this.textRenderer.getWidth(cur.isEmpty() ? placeholder : cur);
         int width = Math.max(60, textW + 10);
 
         msl$textBox.setDimensionsAndPosition(width, 16, 22, this.height - 24);
