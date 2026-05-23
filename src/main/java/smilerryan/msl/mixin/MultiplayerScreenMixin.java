@@ -34,7 +34,9 @@ public abstract class MultiplayerScreenMixin extends Screen {
     @Unique private int msl$idx = 0;
 
     @Unique private String msl$last = null;
-    @Unique private boolean msl$json = true;
+
+    // DEFAULT: DAT MODE (json disabled initially)
+    @Unique private boolean msl$json = false;
 
     protected MultiplayerScreenMixin(Text t) { super(t); }
 
@@ -52,7 +54,7 @@ public abstract class MultiplayerScreenMixin extends Screen {
 
         this.addDrawableChild(msl$btn);
         this.addSelectableChild(msl$btn);
-        
+
         this.addDrawableChild(msl$textBox);
         this.addSelectableChild(msl$textBox);
 
@@ -66,7 +68,8 @@ public abstract class MultiplayerScreenMixin extends Screen {
             File jsonFile = msl$j(profile);
             File datFile = msl$d(profile);
 
-            if (jsonFile.exists()) {
+            // JSON -> DAT only if DAT does NOT exist
+            if (jsonFile.exists() && !datFile.exists()) {
 
                 JsonObject root;
                 try (FileReader r = new FileReader(jsonFile)) {
@@ -87,10 +90,11 @@ public abstract class MultiplayerScreenMixin extends Screen {
                 NbtIo.writeCompressed(out, datFile.toPath());
                 jsonFile.delete();
 
-                msl$json = true;
+                msl$json = false;
                 return;
             }
 
+            // DAT -> JSON
             if (datFile.exists()) {
 
                 NbtCompound root = null;
@@ -144,18 +148,17 @@ public abstract class MultiplayerScreenMixin extends Screen {
 
         if (msl$textBox == null || msl$btn == null) return;
 
-        if (msl$btn != null && !this.children().contains(msl$btn)) {
+        if (!this.children().contains(msl$btn)) {
             this.addDrawableChild(msl$btn);
             this.addSelectableChild(msl$btn);
         }
 
-        if (msl$textBox != null && !this.children().contains(msl$textBox)) {
+        if (!this.children().contains(msl$textBox)) {
             this.addDrawableChild(msl$textBox);
             this.addSelectableChild(msl$textBox);
         }
 
         String cur = msl$textBox.getText();
-
         String placeholder = "General";
 
         msl$textBox.setSuggestion(cur.isEmpty() ? placeholder : "");
@@ -173,13 +176,10 @@ public abstract class MultiplayerScreenMixin extends Screen {
             msl$load(p);
         }
 
-        // button color update (JSON = green, DAT/NBT = red)
-        if (msl$btn != null) {
-            msl$btn.active = true;
-            msl$btn.setMessage(Text.literal("J").styled(style -> {
-                return style.withColor(msl$json ? 0x00FF00 : 0xFF0000);
-            }));
-        }
+        // green = JSON mode ON, red = DAT mode
+        msl$btn.setMessage(Text.literal("J").styled(style ->
+                style.withColor(msl$json ? 0x00FF00 : 0xFF0000)
+        ));
     }
 
     @Override
@@ -238,6 +238,31 @@ public abstract class MultiplayerScreenMixin extends Screen {
                     List<ServerInfo> s = msl$list(this);
                     s.clear();
 
+                    // DAT has priority
+                    if (d.exists()) {
+
+                        NbtCompound root;
+                        try {
+                            root = NbtIo.readCompressed(d.toPath(), NbtSizeTracker.ofUnlimitedBytes());
+                        } catch (Exception e) {
+                            root = NbtIo.read(d.toPath());
+                        }
+
+                        NbtList list = root.getList("servers").orElse(null);
+                        if (list != null) {
+                            for (int i = 0; i < list.size(); i++) {
+                                if (list.get(i) instanceof NbtCompound c) {
+                                    ServerInfo info = ServerInfo.fromNbt(c);
+                                    if (info != null) s.add(info);
+                                }
+                            }
+                        }
+
+                        msl$json = false;
+                        return;
+                    }
+
+                    // JSON fallback
                     if (j.exists()) {
 
                         try (FileReader r = new FileReader(j)) {
@@ -251,28 +276,6 @@ public abstract class MultiplayerScreenMixin extends Screen {
                         }
 
                         msl$json = true;
-                        return;
-                    }
-
-                    if (d.exists()) {
-
-                        NbtCompound root;
-                        try {
-                            root = NbtIo.readCompressed(d.toPath(), NbtSizeTracker.ofUnlimitedBytes());
-                        } catch (Exception e) {
-                            root = NbtIo.read(d.toPath());
-                        }
-
-                        NbtList list = root.getList("servers").orElse(null);
-                        if (list == null) return;
-
-                        for (int i=0;i<list.size();i++)
-                            if (list.get(i) instanceof NbtCompound c) {
-                                ServerInfo info = ServerInfo.fromNbt(c);
-                                if (info != null) s.add(info);
-                            }
-
-                        msl$json = false;
                     }
 
                 } catch (Exception ignored) {}
