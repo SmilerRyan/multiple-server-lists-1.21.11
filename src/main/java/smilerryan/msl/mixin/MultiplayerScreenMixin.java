@@ -163,10 +163,7 @@ public abstract class MultiplayerScreenMixin extends Screen {
 
         msl$textBox.setSuggestion(cur.isEmpty() ? placeholder : "");
 
-        int textW = this.textRenderer.getWidth(cur.isEmpty() ? placeholder : cur);
-        int width = Math.max(60, textW + 10);
-
-        msl$textBox.setDimensionsAndPosition(width, 16, 22, this.height - 24);
+        msl$textBox.setDimensionsAndPosition(100, 16, 22, this.height - 24);
         msl$btn.setPosition(4, this.height - 24);
 
         String p = msl$p(cur);
