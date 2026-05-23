@@ -143,10 +143,19 @@ public abstract class MultiplayerScreenMixin extends Screen {
                         return;
                     }
 
-                    net.minecraft.nbt.NbtCompound nbtCompound = net.minecraft.nbt.NbtIo.readCompressed(
-                        customFile.toPath(), 
-                        net.minecraft.nbt.NbtSizeTracker.ofUnlimitedBytes()
-                    );
+                    net.minecraft.nbt.NbtCompound nbtCompound = null;
+                    try {
+                        nbtCompound = net.minecraft.nbt.NbtIo.readCompressed(
+                            customFile.toPath(), 
+                            net.minecraft.nbt.NbtSizeTracker.ofUnlimitedBytes()
+                        );
+                    } catch (java.util.zip.ZipException e) {
+                        try {
+                            nbtCompound = net.minecraft.nbt.NbtIo.read(customFile.toPath());
+                        } catch (Exception uncompressedException) {
+                            uncompressedException.printStackTrace();
+                        }
+                    }
                     
                     if (nbtCompound != null) {
                         net.minecraft.nbt.NbtList nbtList = nbtCompound.getList("servers").orElse(null);
