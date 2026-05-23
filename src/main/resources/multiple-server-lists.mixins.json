@@ -1,0 +1,17 @@
+{
+	"required": true,
+	"package": "smilerryan.msl.mixin",
+	"compatibilityLevel": "JAVA_21",
+	"mixins": [
+		"ExampleMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	},
+	"client": [
+		"MultiplayerScreenMixin"
+	],
+	"overwrites": {
+		"requireAnnotations": true
+	}
+}

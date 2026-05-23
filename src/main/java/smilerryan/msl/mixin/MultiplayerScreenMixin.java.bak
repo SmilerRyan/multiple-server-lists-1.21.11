@@ -1,0 +1,216 @@
+package smilerryan.msl.mixin;
+
+import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.client.gui.screen.multiplayer.MultiplayerScreen;
+import net.minecraft.client.gui.widget.TextFieldWidget;
+import net.minecraft.client.option.ServerList; // Correct modern package and class name
+import net.minecraft.text.Text;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+import java.io.File;
+import java.lang.reflect.Field;
+
+@Mixin(MultiplayerScreen.class)
+public abstract class MultiplayerScreenMixin extends Screen {
+    // Shadow the corrected class types
+    @Shadow private ServerList serverList;
+    @Shadow private net.minecraft.client.gui.screen.multiplayer.MultiplayerServerListWidget serverListWidget;
+
+    @Unique private TextFieldWidget msl$textBox;
+    @Unique private TextFieldWidget msl$previewBox;
+    @Unique private String msl$lastValue = null;
+
+    protected MultiplayerScreenMixin(Text title) { super(title); }
+
+    @Inject(method = "init", at = @At("TAIL"))
+    private void addTextBox(CallbackInfo ci) {
+        msl$textBox = new TextFieldWidget(this.textRenderer, 4, this.height - 48, 150, 20, Text.literal(""));
+        msl$textBox.setMaxLength(256);
+
+        msl$previewBox = new TextFieldWidget(this.textRenderer, 4, this.height - 24, 150, 20, Text.literal("servers.dat"));
+        msl$previewBox.setMaxLength(256);
+        msl$previewBox.setEditable(false);
+
+        this.addDrawableChild(msl$previewBox);
+        this.addDrawableChild(msl$textBox);
+    }
+
+    @Inject(method = "tick", at = @At("TAIL"))
+    private void updateTextBoxPosition(CallbackInfo ci) {
+        if (msl$textBox == null || msl$previewBox == null) return;
+
+        msl$textBox.setDimensionsAndPosition(150, 20, 4, this.height - 48);
+        msl$previewBox.setDimensionsAndPosition(150, 20, 4, this.height - 24);
+
+        String current = msl$textBox.getText();
+        if (!current.equals(msl$lastValue)) {
+            msl$lastValue = current;
+            String sanitized = current.replaceAll("[^A-Za-z0-9]", "-");
+            String fileName = sanitized.isEmpty() ? "servers.dat" : "servers-" + sanitized + ".dat";
+            msl$previewBox.setText(fileName);
+
+            msl$reloadServerList(fileName);
+        }
+    }
+
+    // @Unique
+    // private void msl$reloadServerList(String fileName) {
+    //     if (this.client == null) return;
+
+    //     // Instantiate the updated class name
+    //     ServerList newList = new ServerList(this.client);
+
+    //     try {
+    //         Field fileField = null;
+    //         // Scan fields of ServerList instead
+    //         for (Field field : ServerList.class.getDeclaredFields()) {
+    //             if (field.getType() == File.class) {
+    //                 fileField = field;
+    //                 break;
+    //             }
+    //         }
+
+    //         if (fileField != null) {
+    //             fileField.setAccessible(true);
+                
+    //             // Point it specifically to our brand new file target path
+    //             File newFileTarget = new File(this.client.runDirectory, fileName);
+    //             fileField.set(newList, newFileTarget);
+    //         }
+    //     } catch (Exception e) {
+    //         e.printStackTrace();
+    //     }
+
+    //     // Apply our reflected adjustments back to the screen state and reload the UI list
+    //     this.serverList = newList;
+    //     this.serverList.loadFile();
+
+    //     if (this.serverListWidget != null) {
+    //         this.serverListWidget.setSelected(null); 
+    //         this.serverListWidget.setServers(this.serverList);
+    //     }
+    // }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+@Unique
+    @SuppressWarnings("unchecked")
+    private void msl$reloadServerList(String fileName) {
+        if (this.client == null) return;
+
+        final java.io.File customFile = new java.io.File(this.client.runDirectory, fileName);
+
+        ServerList newList = new ServerList(this.client) {
+            @Override
+            public void loadFile() {
+                try {
+                    // Pull private server storage list via reflection
+                    java.lang.reflect.Field serversField = ServerList.class.getDeclaredField("field_3749");
+                    serversField.setAccessible(true);
+                    java.util.List<net.minecraft.client.network.ServerInfo> internalServers = 
+                        (java.util.List<net.minecraft.client.network.ServerInfo>) serversField.get(this);
+                    
+                    internalServers.clear();
+                    
+                    if (!customFile.exists()) {
+                        return;
+                    }
+
+                    net.minecraft.nbt.NbtCompound nbtCompound = net.minecraft.nbt.NbtIo.readCompressed(
+                        customFile.toPath(), 
+                        net.minecraft.nbt.NbtSizeTracker.ofUnlimitedBytes()
+                    );
+                    
+                    if (nbtCompound != null) {
+                        // Safely unwrap the Optional<NbtList> using .orElse(null)
+                        net.minecraft.nbt.NbtList nbtList = nbtCompound.getList("servers").orElse(null);
+                        
+                        if (nbtList != null) {
+                            for (int i = 0; i < nbtList.size(); ++i) {
+                                net.minecraft.nbt.NbtElement element = nbtList.get(i);
+                                
+                                if (element instanceof net.minecraft.nbt.NbtCompound serverData) {
+                                    net.minecraft.client.network.ServerInfo info = 
+                                        net.minecraft.client.network.ServerInfo.fromNbt(serverData);
+                                    if (info != null) {
+                                        internalServers.add(info);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+
+            @Override
+            public void saveFile() {
+                try {
+                    java.lang.reflect.Field serversField = ServerList.class.getDeclaredField("field_3749");
+                    serversField.setAccessible(true);
+                    java.util.List<net.minecraft.client.network.ServerInfo> internalServers = 
+                        (java.util.List<net.minecraft.client.network.ServerInfo>) serversField.get(this);
+
+                    net.minecraft.nbt.NbtList nbtList = new net.minecraft.nbt.NbtList();
+                    for (net.minecraft.client.network.ServerInfo serverInfo : internalServers) {
+                        nbtList.add(serverInfo.toNbt());
+                    }
+
+                    net.minecraft.nbt.NbtCompound nbtCompound = new net.minecraft.nbt.NbtCompound();
+                    nbtCompound.put("servers", nbtList);
+
+                    net.minecraft.nbt.NbtIo.writeCompressed(nbtCompound, customFile.toPath());
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        };
+
+        this.serverList = newList;
+        this.serverList.loadFile();
+
+        if (this.serverListWidget != null) {
+            this.serverListWidget.setSelected(null); 
+            this.serverListWidget.setServers(this.serverList);
+        }
+    }
+
+
+
+
+
+
+
+}
