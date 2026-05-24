@@ -6,6 +6,7 @@ import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.client.option.ServerList;
 import net.minecraft.text.Text;
+import org.lwjgl.glfw.GLFW;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
@@ -24,20 +25,35 @@ public abstract class MultiplayerScreenMixin extends Screen {
     @Shadow private ServerList serverList;
     @Shadow private net.minecraft.client.gui.screen.multiplayer.MultiplayerServerListWidget serverListWidget;
 
+    @Unique private static final int BOX_X = 10;
+    @Unique private static final int BOX_Y = 10;
+    @Unique private static final int BOX_W = 100;
+    @Unique private static final int BOX_H = 16;
+
+    @Unique private static final int DROPDOWN_Y = 26;
+
+    @Unique private static final float ANIM_SPEED = 0.18f;
+    @Unique private static final long MOUSE_IDLE_MS = 150L;
+    @Unique private static final long SCROLL_DELAY_MS = 40L;
+
     @Unique private TextFieldWidget textBox;
 
     @Unique private final List<String> profiles = new ArrayList<>();
     @Unique private final List<ButtonWidget> dropdownButtons = new ArrayList<>();
 
-    @Unique private float dropdownProgress = 0f;
-    @Unique private boolean dropdownTargetOpen = false;
+    @Unique private float dropdownProgress;
+    @Unique private boolean dropdownTargetOpen;
 
     @Unique private String lastHoveredProfile = "";
 
     @Unique private double lastMouseX = -1;
     @Unique private double lastMouseY = -1;
-    @Unique private long lastMouseMoveTime = 0;
-    @Unique private static final long MOUSE_IDLE_MS = 150;
+    @Unique private long lastMouseMoveTime;
+
+    @Unique private int scrollIndex = -1;
+    @Unique private long lastScrollTime;
+
+    @Unique private File serversDir;
 
     protected MultiplayerScreenMixin(Text title) {
         super(title);
@@ -45,158 +61,280 @@ public abstract class MultiplayerScreenMixin extends Screen {
 
     @Inject(method = "init", at = @At("RETURN"))
     private void onInit(CallbackInfo ci) {
-        textBox = new TextFieldWidget(this.textRenderer, 10, 10, 100, 16, Text.literal(""));
+        textBox = new TextFieldWidget(
+            this.textRenderer,
+            BOX_X,
+            BOX_Y,
+            BOX_W,
+            BOX_H,
+            Text.empty()
+        );
+
         addDrawableChild(textBox);
         addSelectableChild(textBox);
+
+        serversDir = new File(client.runDirectory, "servers");
+
+        if (!serversDir.exists()) {
+            serversDir.mkdirs();
+        }
+
         rebuildDropdown();
     }
 
     @Inject(method = "tick", at = @At("TAIL"))
     private void onTick(CallbackInfo ci) {
-        if (textBox == null || client == null) return;
+        if (client == null || textBox == null) {
+            return;
+        }
 
-        textBox.setDimensionsAndPosition(100, 16, 10, 10);
+        textBox.setDimensionsAndPosition(BOX_W, BOX_H, BOX_X, BOX_Y);
 
+        handleProfileTyping();
+        handleEnterCreate();
+        handleHoverSelection();
+        updateAnimation();
+    }
+
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
+        if (textBox == null || profiles.isEmpty()) {
+            return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
+        }
+
+        if (!(textBox.isFocused() || textBox.isMouseOver(mouseX, mouseY))) {
+            return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
+        }
+
+        long now = System.currentTimeMillis();
+
+        if (now - lastScrollTime < SCROLL_DELAY_MS) {
+            return true;
+        }
+
+        lastScrollTime = now;
+
+        if (scrollIndex == -1) {
+            scrollIndex = profiles.indexOf(textBox.getText());
+
+            if (scrollIndex < 0) {
+                scrollIndex = 0;
+            }
+        }
+
+        if (verticalAmount > 0) {
+            scrollIndex--;
+        } else if (verticalAmount < 0) {
+            scrollIndex++;
+        }
+
+        if (scrollIndex < 0) {
+            scrollIndex = profiles.size() - 1;
+        } else if (scrollIndex >= profiles.size()) {
+            scrollIndex = 0;
+        }
+
+        selectProfile(profiles.get(scrollIndex));
+
+        return true;
+    }
+
+    @Unique
+    private void handleProfileTyping() {
         String current = textBox.getText();
-        if (!current.equals(MultipleServerLists.currentServerListFile) && !current.isEmpty()) {
-            MultipleServerLists.currentServerListFile = current;
+
+        if (!current.isEmpty() && !current.equals(MultipleServerLists.currentServerListFile)) {
             loadProfile(current);
         }
+    }
 
-        if (textBox.isFocused() &&
-            org.lwjgl.glfw.GLFW.glfwGetKey(client.getWindow().getHandle(),
-            org.lwjgl.glfw.GLFW.GLFW_KEY_ENTER) == org.lwjgl.glfw.GLFW.GLFW_PRESS
-        ) {
-            String name = textBox.getText();
-            if (name == null || name.isEmpty()) return;
-            File dir = new File(client.runDirectory, "servers");
-            if (!dir.exists()) dir.mkdirs();
-            File file = new File(dir, name);
-            try {if (!file.exists()) {file.createNewFile();}} catch (Exception ignored) {}
-            rebuildDropdown();
+    @Unique
+    private void handleEnterCreate() {
+        if (!textBox.isFocused()) {
+            return;
         }
 
-        double mouseX = client.mouse.getX() * (double) width / (double) client.getWindow().getWidth();
-        double mouseY = client.mouse.getY() * (double) height / (double) client.getWindow().getHeight();
+        if (GLFW.glfwGetKey(
+            client.getWindow().getHandle(),
+            GLFW.GLFW_KEY_ENTER
+        ) != GLFW.GLFW_PRESS) {
+            return;
+        }
 
-        // detect mouse movement
+        String name = textBox.getText();
+
+        if (name == null || name.isEmpty()) {
+            return;
+        }
+
+        File file = new File(serversDir, name);
+
+        try {
+            if (!file.exists()) {
+                file.createNewFile();
+                rebuildDropdown();
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    @Unique
+    private void handleHoverSelection() {
+        double mouseX = client.mouse.getX() * width / client.getWindow().getWidth();
+        double mouseY = client.mouse.getY() * height / client.getWindow().getHeight();
+
         if (mouseX != lastMouseX || mouseY != lastMouseY) {
             lastMouseMoveTime = System.currentTimeMillis();
             lastMouseX = mouseX;
             lastMouseY = mouseY;
         }
 
-        boolean mouseIdle = (System.currentTimeMillis() - lastMouseMoveTime) > MOUSE_IDLE_MS;
+        boolean mouseIdle = System.currentTimeMillis() - lastMouseMoveTime > MOUSE_IDLE_MS;
 
         boolean hoverText = textBox.isMouseOver(mouseX, mouseY);
-        boolean hoverDropdown = false;
+
         String hoveredProfile = null;
 
         for (ButtonWidget btn : dropdownButtons) {
             if (btn.isMouseOver(mouseX, mouseY)) {
-                hoverDropdown = true;
                 hoveredProfile = btn.getMessage().getString();
                 break;
             }
         }
 
-        dropdownTargetOpen = hoverText || hoverDropdown;
+        dropdownTargetOpen = hoverText || hoveredProfile != null;
 
-        // ONLY trigger when mouse is idle
-        if (mouseIdle && hoveredProfile != null && !hoveredProfile.equals(lastHoveredProfile)) {
+        if (
+            mouseIdle &&
+            hoveredProfile != null &&
+            !hoveredProfile.equals(lastHoveredProfile)
+        ) {
             lastHoveredProfile = hoveredProfile;
-            textBox.setText(hoveredProfile);
-            loadProfile(hoveredProfile);
-            rebuildDropdown();
+            selectProfile(hoveredProfile);
         }
 
         if (hoveredProfile == null) {
             lastHoveredProfile = "";
         }
-
-        updateAnimation();
     }
 
     @Unique
     private void updateAnimation() {
-        float speed = 0.18f;
 
-        dropdownProgress += dropdownTargetOpen ? speed : -speed;
-        dropdownProgress = Math.max(0f, Math.min(1f, dropdownProgress));
+        textBox.setSuggestion(
+            textBox.getText().isEmpty() ? "General" : ""
+        );
+
+        dropdownProgress += dropdownTargetOpen ? ANIM_SPEED : -ANIM_SPEED;
+
+        if (dropdownProgress < 0f) {
+            dropdownProgress = 0f;
+        } else if (dropdownProgress > 1f) {
+            dropdownProgress = 1f;
+        }
 
         layoutButtons();
     }
 
     @Unique
     private void layoutButtons() {
-        int baseX = 10;
-        int baseYHidden = 10;
-        int baseY = 26;
-        int h = 16;
-
         float t = easeOut(dropdownProgress);
+
         boolean visible = dropdownProgress > 0.01f;
+        boolean active = dropdownProgress > 0.5f;
 
         for (int i = 0; i < dropdownButtons.size(); i++) {
             ButtonWidget btn = dropdownButtons.get(i);
 
-            int targetY = baseY + (i * h);
-            int y = (int) (baseYHidden + (targetY - baseYHidden) * t);
+            int targetY = DROPDOWN_Y + (i * BOX_H);
 
-            btn.setX(baseX);
+            int y = (int) (BOX_Y + ((targetY - BOX_Y) * t));
+
+            btn.setX(BOX_X);
             btn.setY(y);
 
             btn.visible = visible;
-            btn.active = dropdownProgress > 0.5f;
+            btn.active = active;
         }
     }
 
     @Unique
     private float easeOut(float t) {
-        return (float) (1 - Math.pow(1 - t, 3));
+        return 1f - (float) Math.pow(1f - t, 3);
     }
 
     @Unique
     private void rebuildDropdown() {
-        for (ButtonWidget b : dropdownButtons) {
-            remove(b);
+        for (ButtonWidget button : dropdownButtons) {
+            remove(button);
         }
+
         dropdownButtons.clear();
         profiles.clear();
-        File serversDir = new File(client.runDirectory, "servers");
-        if (!serversDir.exists()) {
-            serversDir.mkdirs();
-        }
-        if (serversDir.exists() && serversDir.isDirectory()) {
-            for (File f : serversDir.listFiles()) {
-                if (!f.getName().endsWith(".old")) {
-                    profiles.add(f.getName());
+
+        scrollIndex = -1;
+
+        File[] files = serversDir.listFiles();
+
+        if (files != null) {
+            for (File file : files) {
+                String name = file.getName();
+
+                if (!name.endsWith(".old")) {
+                    profiles.add(name);
                 }
             }
         }
-        int y = 26;
+
+        int y = DROPDOWN_Y;
+
         for (String profile : profiles) {
-            ButtonWidget btn = ButtonWidget.builder(Text.literal(profile), b -> {
-                textBox.setText(profile);
-                loadProfile(profile);
-                dropdownTargetOpen = false;
-            }).dimensions(10, y, 100, 16).build();
+            ButtonWidget btn = ButtonWidget.builder(
+                Text.literal(profile),
+                b -> {
+                    selectProfile(profile);
+                    dropdownTargetOpen = false;
+                }
+            ).dimensions(
+                BOX_X,
+                y,
+                BOX_W,
+                BOX_H
+            ).build();
+
             dropdownButtons.add(btn);
+
             addDrawableChild(btn);
             addSelectableChild(btn);
-            y += 16;
+
+            y += BOX_H;
         }
+
         layoutButtons();
     }
 
     @Unique
+    private void selectProfile(String profile) {
+        textBox.setText(profile);
+        loadProfile(profile);
+
+        scrollIndex = profiles.indexOf(profile);
+    }
+
+    @Unique
     private void loadProfile(String profile) {
-        if (client == null) return;
+        if (client == null) {
+            return;
+        }
+
         if (profile == null || profile.isEmpty()) {
             profile = "General";
         }
+
         MultipleServerLists.currentServerListFile = profile;
+
         serverList.loadFile();
+
         if (serverListWidget != null) {
             serverListWidget.setSelected(null);
             serverListWidget.setServers(serverList);
