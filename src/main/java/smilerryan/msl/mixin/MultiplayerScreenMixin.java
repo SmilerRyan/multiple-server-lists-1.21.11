@@ -32,6 +32,13 @@ public abstract class MultiplayerScreenMixin extends Screen {
     @Unique private float dropdownProgress = 0f;
     @Unique private boolean dropdownTargetOpen = false;
 
+    @Unique private String lastHoveredProfile = "";
+
+    @Unique private double lastMouseX = -1;
+    @Unique private double lastMouseY = -1;
+    @Unique private long lastMouseMoveTime = 0;
+    @Unique private static final long MOUSE_IDLE_MS = 150;
+
     protected MultiplayerScreenMixin(Text title) {
         super(title);
     }
@@ -41,7 +48,6 @@ public abstract class MultiplayerScreenMixin extends Screen {
         textBox = new TextFieldWidget(this.textRenderer, 10, 10, 100, 16, Text.literal(""));
         addDrawableChild(textBox);
         addSelectableChild(textBox);
-
         rebuildDropdown();
     }
 
@@ -52,30 +58,63 @@ public abstract class MultiplayerScreenMixin extends Screen {
         textBox.setDimensionsAndPosition(100, 16, 10, 10);
 
         String current = textBox.getText();
-        if (!current.equals(MultipleServerLists.currentServerListFile)) {
+        if (!current.equals(MultipleServerLists.currentServerListFile) && !current.isEmpty()) {
             MultipleServerLists.currentServerListFile = current;
             loadProfile(current);
+        }
+
+        if (textBox.isFocused() &&
+            org.lwjgl.glfw.GLFW.glfwGetKey(client.getWindow().getHandle(),
+            org.lwjgl.glfw.GLFW.GLFW_KEY_ENTER) == org.lwjgl.glfw.GLFW.GLFW_PRESS
+        ) {
+            String name = textBox.getText();
+            if (name == null || name.isEmpty()) return;
+            File dir = new File(client.runDirectory, "servers");
+            if (!dir.exists()) dir.mkdirs();
+            File file = new File(dir, name);
+            try {if (!file.exists()) {file.createNewFile();}} catch (Exception ignored) {}
+            rebuildDropdown();
         }
 
         double mouseX = client.mouse.getX() * (double) width / (double) client.getWindow().getWidth();
         double mouseY = client.mouse.getY() * (double) height / (double) client.getWindow().getHeight();
 
+        // detect mouse movement
+        if (mouseX != lastMouseX || mouseY != lastMouseY) {
+            lastMouseMoveTime = System.currentTimeMillis();
+            lastMouseX = mouseX;
+            lastMouseY = mouseY;
+        }
+
+        boolean mouseIdle = (System.currentTimeMillis() - lastMouseMoveTime) > MOUSE_IDLE_MS;
+
         boolean hoverText = textBox.isMouseOver(mouseX, mouseY);
-        boolean hoverDropdown = isHoveringDropdown(mouseX, mouseY);
+        boolean hoverDropdown = false;
+        String hoveredProfile = null;
+
+        for (ButtonWidget btn : dropdownButtons) {
+            if (btn.isMouseOver(mouseX, mouseY)) {
+                hoverDropdown = true;
+                hoveredProfile = btn.getMessage().getString();
+                break;
+            }
+        }
 
         dropdownTargetOpen = hoverText || hoverDropdown;
 
-        updateAnimation();
-    }
-
-    /* ---------------- Animation ---------------- */
-
-    @Unique
-    private boolean isHoveringDropdown(double mouseX, double mouseY) {
-        for (ButtonWidget btn : dropdownButtons) {
-            if (btn.isMouseOver(mouseX, mouseY)) return true;
+        // ONLY trigger when mouse is idle
+        if (mouseIdle && hoveredProfile != null && !hoveredProfile.equals(lastHoveredProfile)) {
+            lastHoveredProfile = hoveredProfile;
+            textBox.setText(hoveredProfile);
+            loadProfile(hoveredProfile);
+            rebuildDropdown();
         }
-        return false;
+
+        if (hoveredProfile == null) {
+            lastHoveredProfile = "";
+        }
+
+        updateAnimation();
     }
 
     @Unique
@@ -117,80 +156,50 @@ public abstract class MultiplayerScreenMixin extends Screen {
         return (float) (1 - Math.pow(1 - t, 3));
     }
 
-    /* ---------------- Dropdown ---------------- */
-
     @Unique
     private void rebuildDropdown() {
-        clearDropdown();
-        scanProfiles();
-
+        for (ButtonWidget b : dropdownButtons) {
+            remove(b);
+        }
+        dropdownButtons.clear();
+        profiles.clear();
+        File serversDir = new File(client.runDirectory, "servers");
+        if (!serversDir.exists()) {
+            serversDir.mkdirs();
+        }
+        if (serversDir.exists() && serversDir.isDirectory()) {
+            for (File f : serversDir.listFiles()) {
+                if (!f.getName().endsWith(".old")) {
+                    profiles.add(f.getName());
+                }
+            }
+        }
         int y = 26;
-
         for (String profile : profiles) {
             ButtonWidget btn = ButtonWidget.builder(Text.literal(profile), b -> {
                 textBox.setText(profile);
                 loadProfile(profile);
                 dropdownTargetOpen = false;
             }).dimensions(10, y, 100, 16).build();
-
             dropdownButtons.add(btn);
             addDrawableChild(btn);
             addSelectableChild(btn);
-
             y += 16;
         }
-
         layoutButtons();
     }
 
     @Unique
-    private void clearDropdown() {
-        for (ButtonWidget b : dropdownButtons) {
-            remove(b);
-        }
-        dropdownButtons.clear();
-    }
-
-    /* ---------------- Profiles ---------------- */
-
-    @Unique
     private void loadProfile(String profile) {
         if (client == null) return;
-
         if (profile == null || profile.isEmpty()) {
-            profile = "servers.dat";
+            profile = "General";
         }
-
-        if (!profile.startsWith("servers-")) {
-            profile = "servers-" + profile;
-        }
-
-        if (!profile.endsWith(".dat")) {
-            profile += ".dat";
-        }
-
         MultipleServerLists.currentServerListFile = profile;
-
         serverList.loadFile();
-
         if (serverListWidget != null) {
             serverListWidget.setSelected(null);
             serverListWidget.setServers(serverList);
-        }
-    }
-
-    @Unique
-    private void scanProfiles() {
-        profiles.clear();
-
-        File[] files = client.runDirectory.listFiles();
-        if (files == null) return;
-
-        for (File f : files) {
-            String name = f.getName();
-            if (name.startsWith("servers") && name.endsWith(".dat")) {
-                profiles.add(name);
-            }
         }
     }
 }

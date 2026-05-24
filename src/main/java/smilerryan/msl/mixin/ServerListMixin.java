@@ -13,7 +13,7 @@ public class ServerListMixin {
         constant = @Constant(stringValue = "servers.dat")
     )
     private String redirect_1(String original) {
-        return MultipleServerLists.currentServerListFile;
+        return "Servers//" + MultipleServerLists.currentServerListFile;
     }
 
     @ModifyConstant(
@@ -21,7 +21,7 @@ public class ServerListMixin {
         constant = @Constant(stringValue = "servers.dat_old")
     )
     private String redirect_2(String original) {
-        return MultipleServerLists.currentServerListFile + ".old";
+        return "Servers//" + MultipleServerLists.currentServerListFile + ".old";
     }
 
 }
